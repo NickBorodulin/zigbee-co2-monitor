@@ -1,0 +1,6 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+/.idea/
+/managed_components/
+/main/csrc/
