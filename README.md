@@ -77,6 +77,20 @@ The device advertises manufacturer `Custom` and model `ESP32H2_CO2`. Zigbee2MQTT
 
 The device is configured with the Zigbee Router role. Whether it is selected as a parent or route for another device depends on the coordinator, network topology, link quality, and Zigbee routing decisions.
 
+### Zigbee2MQTT external converter
+
+Zigbee2MQTT needs a device definition to expose this device's measurements consistently and enable OTA updates. The repository includes `zigbee2mqtt/ESP32H2_CO2.mjs` for model `ESP32H2_CO2`.
+
+Copy this file into the `external_converters` directory next to Zigbee2MQTT's `configuration.yaml`, then restart Zigbee2MQTT. If the converter is not loaded, check that external JavaScript converters are enabled in the Zigbee2MQTT configuration. The converter exposes temperature, humidity, CO₂, and illuminance, and declares OTA support.
+
+For a custom OTA update, open the device's OTA dialog in Zigbee2MQTT, select **Custom index**, and enter the repository index URL:
+
+```text
+https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/index.json
+```
+
+The index must point to the matching `.ota` file, and its firmware version must be newer than the version currently installed on the device. See [OTA_README_EN.md](main/OTA_README_EN.md) for image packaging and release steps.
+
 Hold the button on GPIO4 for at least 3 seconds to erase the device's Zigbee network data and restart it. After reboot, permit joining in Zigbee2MQTT to pair it again.
 
 ## Partition layout and OTA
@@ -131,11 +145,14 @@ The component CMake file creates the SPIFFS image from `main/display_fs` and inc
 ```text
 .
 ├── hardware/gerber/       PCB manufacturing archive
+├── OTA/                   Zigbee OTA image and index
 ├── main/
 │   ├── display_fs/         4-bpp display glyph and icon assets
 │   ├── zigbee_CO2.c        Firmware application
 │   ├── make_zigbee_ota.py  Zigbee OTA image and index packager
 │   └── OTA_README_EN.md    OTA instructions
+├── zigbee2mqtt/
+│   └── ESP32H2_CO2.mjs     External Zigbee2MQTT converter
 ├── partitions.csv         Custom OTA/SPIFFS partition table
 └── CMakeLists.txt         ESP-IDF project entry point
 ```
@@ -147,3 +164,5 @@ The project source is licensed under the MIT License. Third-party fonts and icon
 ## Project status
 
 This is a personal hardware and firmware project. The firmware has been built and run on the device. The Zigbee OTA transfer should be validated on the target device before relying on it for unattended updates.
+
+
