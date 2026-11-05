@@ -1476,10 +1476,12 @@ static uint16_t co2_color(uint16_t co2)
     return COLOR_RED;
 }
 
-static uint16_t temperature_color(float temperature)
+static uint16_t temperature_color(float temperature, bool fahrenheit)
 {
-    if (temperature < 18.0f) return COLOR_BLUE;
-    if (temperature <= 26.0f) return COLOR_GREEN;
+    const float cold_limit = fahrenheit ? 64.4f : 18.0f;
+    const float warm_limit = fahrenheit ? 78.8f : 26.0f;
+    if (temperature < cold_limit) return COLOR_BLUE;
+    if (temperature <= warm_limit) return COLOR_GREEN;
     return COLOR_RED;
 }
 
@@ -1865,7 +1867,7 @@ static void draw_environment_values(void)
     snprintf(temperature_text, sizeof(temperature_text), "%.1fo%s",
              (double)display_value, display_fahrenheit ? "F" : "C");
     snprintf(humidity_text, sizeof(humidity_text), "%.0f%%", (double)display_humidity);
-    const uint16_t temp_color = temperature_color(display_temperature);
+    const uint16_t temp_color = temperature_color(display_value, display_fahrenheit);
     const uint16_t hum_color = humidity_color(display_humidity);
     draw_thermometer_icon(60, 164, temp_color);
     draw_water_icon(156, 164, hum_color);
@@ -1971,7 +1973,13 @@ static esp_err_t display_update(void)
         }
         if (display_measurement_valid && (!display_previous_environment_valid ||
             display_fahrenheit != display_previous_fahrenheit ||
-            temperature_color(display_temperature) != temperature_color(display_previous_temperature) ||
+            temperature_color(display_fahrenheit ?
+                                  display_temperature * 9.0f / 5.0f + 32.0f : display_temperature,
+                              display_fahrenheit) !=
+                temperature_color(display_previous_fahrenheit ?
+                                      display_previous_temperature * 9.0f / 5.0f + 32.0f :
+                                          display_previous_temperature,
+                                  display_previous_fahrenheit) ||
             (int)lroundf(display_temperature * 10.0f) != (int)lroundf(display_previous_temperature * 10.0f))) {
             rects[rect_count++] = (display_rect_t) { 24, 160, 96, 55 };
         }
