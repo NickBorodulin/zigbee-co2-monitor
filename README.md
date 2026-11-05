@@ -9,6 +9,7 @@ An open-source indoor air-quality monitor built around the ESP32-H2 and Sensirio
 - **Ambient light:** a photoresistor divider feeds the ESP32-H2 ADC. The firmware uses the reading both to estimate illuminance for Zigbee and to adjust display brightness.
 - **Automatic backlight:** PWM drives an external N-channel MOSFET to control the GC9A01 backlight. Brightness changes smoothly and is limited to 10–100%.
 - **Round display:** a 240 × 240 GC9A01 screen shows a CO₂ gauge, large numeric reading, temperature, humidity, and Zigbee connection state.
+- **Selectable temperature units:** Celsius is the default; the Zigbee2MQTT temperature display-mode setting changes both the LCD and the MQTT temperature value.
 - **Antialiased assets:** display glyphs and icons are stored as 4-bpp assets in a SPIFFS partition.
 - **Zigbee OTA support:** the firmware contains an OTA Upgrade client, and the repository includes a Zigbee OTA image packager. See [OTA_README_EN.md](main/OTA_README_EN.md) for setup and release steps.
 - **PCB fabrication files:** the Gerber archive is in [`hardware/gerber`](hardware/gerber/).
@@ -71,25 +72,12 @@ The firmware creates endpoint 1 with these standard measurement clusters:
 | Temperature | `0x0402` |
 | Relative humidity | `0x0405` |
 | Carbon dioxide | `0x040D` |
+| Temperature display mode | `0x0204` |
 | OTA Upgrade client | `0x0019` |
 
 The device advertises manufacturer `Custom` and model `ESP32H2_CO2`. Zigbee2MQTT can expose the standard readings as device properties. Link quality is provided by the Zigbee network, not measured by the SCD40.
 
 The device is configured with the Zigbee Router role. Whether it is selected as a parent or route for another device depends on the coordinator, network topology, link quality, and Zigbee routing decisions.
-
-### Zigbee2MQTT external converter
-
-Zigbee2MQTT needs a device definition to expose this device's measurements consistently and enable OTA updates. The repository includes `zigbee2mqtt/ESP32H2_CO2.mjs` for model `ESP32H2_CO2`.
-
-Copy this file into the `external_converters` directory next to Zigbee2MQTT's `configuration.yaml`, then restart Zigbee2MQTT. If the converter is not loaded, check that external JavaScript converters are enabled in the Zigbee2MQTT configuration. The converter exposes temperature, humidity, CO₂, and illuminance, and declares OTA support.
-
-For a custom OTA update, open the device's OTA dialog in Zigbee2MQTT, select **Custom index**, and enter the repository index URL:
-
-```text
-https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/index.json
-```
-
-The index must point to the matching `.ota` file, and its firmware version must be newer than the version currently installed on the device. See [OTA_README_EN.md](main/OTA_README_EN.md) for image packaging and release steps.
 
 Hold the button on GPIO4 for at least 3 seconds to erase the device's Zigbee network data and restart it. After reboot, permit joining in Zigbee2MQTT to pair it again.
 
@@ -145,14 +133,11 @@ The component CMake file creates the SPIFFS image from `main/display_fs` and inc
 ```text
 .
 ├── hardware/gerber/       PCB manufacturing archive
-├── OTA/                   Zigbee OTA image and index
 ├── main/
 │   ├── display_fs/         4-bpp display glyph and icon assets
 │   ├── zigbee_CO2.c        Firmware application
 │   ├── make_zigbee_ota.py  Zigbee OTA image and index packager
 │   └── OTA_README_EN.md    OTA instructions
-├── zigbee2mqtt/
-│   └── ESP32H2_CO2.mjs     External Zigbee2MQTT converter
 ├── partitions.csv         Custom OTA/SPIFFS partition table
 └── CMakeLists.txt         ESP-IDF project entry point
 ```
@@ -164,5 +149,3 @@ The project source is licensed under the MIT License. Third-party fonts and icon
 ## Project status
 
 This is a personal hardware and firmware project. The firmware has been built and run on the device. The Zigbee OTA transfer should be validated on the target device before relying on it for unattended updates.
-
-

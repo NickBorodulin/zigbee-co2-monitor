@@ -123,7 +123,7 @@ save("water", 24, 24, raster(24, 24, in_poly))
 
 # Small unit/punctuation glyphs. C and % come directly from the supplied TTF.
 save("glyph_o", 12, 14, raster(12, 14, lambda x,y: circle(x,y,4.5,3.5,3.0) and not circle(x,y,4.5,3.5,1.5)))
-for character, name in (("C", "glyph_C"), ("%", "glyph_percent")):
+for character, name in (("C", "glyph_C"), ("F", "glyph_F"), ("%", "glyph_percent")):
     glyph_width, glyph_data = font_glyph(character)
     save(name, glyph_width, 14, glyph_data)
 save("glyph_dot", 12, 14, raster(12, 14, lambda x,y: 4 <= x <= 6 and 12 <= y <= 13))

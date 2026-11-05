@@ -30,6 +30,7 @@
 #include "scd4x.h"
 
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_spiffs.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -122,11 +123,14 @@
 // ------------------------------------------------------------
 
 #define ZIGBEE_ENDPOINT                 1
+#define SENSOR_CALIBRATION_CLUSTER_ID   0xFC00U
+#define SENSOR_CALIBRATION_TEMP_ATTR_ID 0x0001U
+#define SENSOR_CALIBRATION_HUM_ATTR_ID  0x0002U
 
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010000UL
+#define OTA_FILE_VERSION                0x00010002UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
@@ -210,7 +214,7 @@ enum {
     ASSET_BIG_0, ASSET_SMALL_0 = 10, ASSET_PPM = 20, ASSET_CO2 = 21,
     ASSET_WIFI = 22, ASSET_THERMO = 23, ASSET_WATER = 24,
     ASSET_GLYPH_O = 25, ASSET_GLYPH_C = 26, ASSET_GLYPH_PERCENT = 27,
-    ASSET_GLYPH_DOT = 28, ASSET_GLYPH_MINUS = 29, ASSET_COUNT = 30
+    ASSET_GLYPH_DOT = 28, ASSET_GLYPH_MINUS = 29, ASSET_GLYPH_F = 30, ASSET_COUNT = 31
 };
 static display_asset_t display_assets[ASSET_COUNT];
 
@@ -561,7 +565,16 @@ static esp_err_t zigbee_ota_action_handler(
             if (ota->ota_header.manufacturer_code != OTA_MANUFACTURER_CODE ||
                 ota->ota_header.image_type != OTA_IMAGE_TYPE ||
                 ota->ota_header.file_version <= OTA_FILE_VERSION) {
-                ESP_LOGE(ZIGBEE_TAG, "Rejected OTA image (manufacturer/type/version mismatch)");
+                ESP_LOGE(ZIGBEE_TAG,
+                         "Rejected OTA image: received manufacturer=0x%04x (expected 0x%04x), "
+                         "image_type=0x%04x (expected 0x%04x), "
+                         "file_version=0x%08" PRIx32 " (must be greater than 0x%08" PRIx32 ")",
+                         (unsigned)ota->ota_header.manufacturer_code,
+                         (unsigned)OTA_MANUFACTURER_CODE,
+                         (unsigned)ota->ota_header.image_type,
+                         (unsigned)OTA_IMAGE_TYPE,
+                         (uint32_t)ota->ota_header.file_version,
+                         (uint32_t)OTA_FILE_VERSION);
                 return ESP_ERR_INVALID_VERSION;
             }
             ota_update_partition = esp_ota_get_next_update_partition(NULL);
@@ -628,6 +641,113 @@ static esp_err_t zigbee_ota_action_handler(
     }
 
     return ESP_OK;
+}
+
+/* Keep the display unit in sync with the standard Thermostat UI Config ZCL
+ * attribute (cluster 0x0204, TemperatureDisplayMode attribute 0x0000). */
+static volatile bool display_fahrenheit;
+static volatile bool display_data_dirty;
+static volatile int16_t temperature_calibration_tenths = 0;
+static volatile int16_t humidity_calibration_percent = 0;
+
+static void load_sensor_calibration(void)
+{
+    nvs_handle_t handle;
+    int16_t value;
+    if (nvs_open("calibration", NVS_READONLY, &handle) == ESP_OK) {
+        if (nvs_get_i16(handle, "temp_tenths", &value) == ESP_OK && value >= -20 && value <= 20)
+            temperature_calibration_tenths = value;
+        if (nvs_get_i16(handle, "humidity", &value) == ESP_OK && value >= -30 && value <= 30)
+            humidity_calibration_percent = value;
+        nvs_close(handle);
+    }
+}
+
+static void save_sensor_calibration(const char *key, int16_t value)
+{
+    nvs_handle_t handle;
+    if (nvs_open("calibration", NVS_READWRITE, &handle) == ESP_OK) {
+        esp_err_t err = nvs_set_i16(handle, key, value);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        if (err != ESP_OK)
+            ESP_LOGW(ZIGBEE_TAG, "Could not persist calibration %s: %s", key, esp_err_to_name(err));
+        nvs_close(handle);
+    }
+}
+
+static void load_temperature_display_mode(void)
+{
+    nvs_handle_t handle;
+    uint8_t mode = 0;
+    if (nvs_open("display", NVS_READONLY, &handle) == ESP_OK) {
+        if (nvs_get_u8(handle, "temp_unit", &mode) == ESP_OK && mode <= 1U) {
+            display_fahrenheit = (mode == 1U);
+        }
+        nvs_close(handle);
+    }
+}
+
+static void save_temperature_display_mode(uint8_t mode)
+{
+    nvs_handle_t handle;
+    if (nvs_open("display", NVS_READWRITE, &handle) == ESP_OK) {
+        esp_err_t err = nvs_set_u8(handle, "temp_unit", mode);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(ZIGBEE_TAG, "Could not persist temperature unit: %s",
+                     esp_err_to_name(err));
+        }
+        nvs_close(handle);
+    }
+}
+
+static esp_err_t zigbee_action_handler(
+    esp_zb_core_action_callback_id_t callback_id,
+    const void *message
+)
+{
+    if (callback_id == ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID && message != NULL) {
+        const esp_zb_zcl_set_attr_value_message_t *attr_message = message;
+        if (attr_message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS &&
+            attr_message->info.dst_endpoint == ZIGBEE_ENDPOINT &&
+            attr_message->info.cluster == SENSOR_CALIBRATION_CLUSTER_ID &&
+            attr_message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 &&
+            attr_message->attribute.data.value != NULL &&
+            attr_message->attribute.data.size >= sizeof(int16_t)) {
+            const int16_t value = *(const int16_t *)attr_message->attribute.data.value;
+            if (attr_message->attribute.id == SENSOR_CALIBRATION_TEMP_ATTR_ID && value >= -20 && value <= 20) {
+                temperature_calibration_tenths = value;
+                save_sensor_calibration("temp_tenths", value);
+                display_data_dirty = true;
+                ESP_LOGI(ZIGBEE_TAG, "Temperature calibration set to %.1f C", value / 10.0f);
+            } else if (attr_message->attribute.id == SENSOR_CALIBRATION_HUM_ATTR_ID && value >= -30 && value <= 30) {
+                humidity_calibration_percent = value;
+                save_sensor_calibration("humidity", value);
+                display_data_dirty = true;
+                ESP_LOGI(ZIGBEE_TAG, "Humidity calibration set to %d %%", value);
+            }
+        }
+        if (attr_message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS &&
+            attr_message->info.dst_endpoint == ZIGBEE_ENDPOINT &&
+            attr_message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_THERMOSTAT_UI_CONFIG &&
+            attr_message->attribute.id ==
+                ESP_ZB_ZCL_ATTR_THERMOSTAT_UI_CONFIG_TEMPERATURE_DISPLAY_MODE_ID &&
+            attr_message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM &&
+            attr_message->attribute.data.value != NULL &&
+            attr_message->attribute.data.size >= sizeof(uint8_t)) {
+            const uint8_t mode = *(const uint8_t *)attr_message->attribute.data.value;
+            if (mode <= 1U) {
+                display_fahrenheit = (mode == 1U);
+                save_temperature_display_mode(mode);
+                display_data_dirty = true;
+                ESP_LOGI(ZIGBEE_TAG, "Temperature display unit set to %s",
+                         display_fahrenheit ? "Fahrenheit" : "Celsius");
+            }
+        }
+        return ESP_OK;
+    }
+
+    return zigbee_ota_action_handler(callback_id, message);
 }
 
 static esp_err_t zigbee_create_device(void)
@@ -803,6 +923,32 @@ static esp_err_t zigbee_create_device(void)
         )
     );
 
+    /* Standard Zigbee UI setting, writable by Zigbee2MQTT. Default: Celsius. */
+    esp_zb_thermostat_ui_config_cluster_cfg_t ui_config = {0};
+    ui_config.temperature_display_mode = 0;
+    esp_zb_attribute_list_t *ui_config_cluster =
+        esp_zb_thermostat_ui_config_cluster_create(&ui_config);
+    if (ui_config_cluster == NULL) {
+        ESP_LOGE(ZIGBEE_TAG, "Failed to create Thermostat UI Config cluster");
+        return ESP_FAIL;
+    }
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_thermostat_ui_config_cluster(
+        cluster_list, ui_config_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    /* Writable device-side calibration attributes. Temperature is in 0.1 C;
+     * humidity is an absolute offset in percentage points. */
+    esp_zb_attribute_list_t *calibration_cluster =
+        esp_zb_zcl_attr_list_create(SENSOR_CALIBRATION_CLUSTER_ID);
+    if (calibration_cluster == NULL) return ESP_FAIL;
+    ESP_ERROR_CHECK(esp_zb_custom_cluster_add_custom_attr(
+        calibration_cluster, SENSOR_CALIBRATION_TEMP_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_S16,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, (void *)&temperature_calibration_tenths));
+    ESP_ERROR_CHECK(esp_zb_custom_cluster_add_custom_attr(
+        calibration_cluster, SENSOR_CALIBRATION_HUM_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_S16,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, (void *)&humidity_calibration_percent));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(
+        cluster_list, calibration_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
 
     /*
      * --------------------------------------------------------
@@ -969,7 +1115,7 @@ static esp_err_t zigbee_create_device(void)
         )
     );
 
-    esp_zb_core_action_handler_register(zigbee_ota_action_handler);
+    esp_zb_core_action_handler_register(zigbee_action_handler);
 
 
     ESP_LOGI(
@@ -1038,6 +1184,21 @@ static void zigbee_task(void *arg)
         zigbee_create_device()
     );
 
+    /* Keep the advertised ZCL setting aligned with the unit retained in NVS. */
+    uint8_t temperature_display_mode = display_fahrenheit ? 1U : 0U;
+    const esp_zb_zcl_status_t unit_status = esp_zb_zcl_set_attribute_val(
+        ZIGBEE_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_THERMOSTAT_UI_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_THERMOSTAT_UI_CONFIG_TEMPERATURE_DISPLAY_MODE_ID,
+        &temperature_display_mode,
+        false
+    );
+    if (unit_status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGW(ZIGBEE_TAG, "Could not initialize temperature display mode: 0x%02x",
+                 unit_status);
+    }
+
     /*
      * Working join workaround:
      * the coordinator was seen with very low LQI during initial
@@ -1081,6 +1242,7 @@ static void zigbee_button_init(void)
         .mode =
             GPIO_MODE_INPUT,
 
+        // The button's bias resistor is installed on the PCB.
         .pull_up_en =
             GPIO_PULLUP_DISABLE,
 
@@ -1232,7 +1394,7 @@ static uint16_t display_co2;
 static float display_temperature;
 static float display_humidity;
 static bool display_measurement_valid;
-static volatile bool display_data_dirty;
+static bool display_previous_fahrenheit;
 static bool display_wifi_blink_on = true;
 static uint16_t display_previous_co2;
 static float display_previous_temperature;
@@ -1494,6 +1656,7 @@ static int small_text_asset(char ch)
     if (ch >= '0' && ch <= '9') return ASSET_SMALL_0 + (ch - '0');
     if (ch == 'o') return ASSET_GLYPH_O;
     if (ch == 'C') return ASSET_GLYPH_C;
+    if (ch == 'F') return ASSET_GLYPH_F;
     if (ch == '%') return ASSET_GLYPH_PERCENT;
     if (ch == '.') return ASSET_GLYPH_DOT;
     if (ch == '-') return ASSET_GLYPH_MINUS;
@@ -1697,7 +1860,10 @@ static void draw_environment_values(void)
     if (!display_measurement_valid) return;
     char temperature_text[16];
     char humidity_text[8];
-    snprintf(temperature_text, sizeof(temperature_text), "%.1foC", (double)display_temperature);
+    const float display_value = display_fahrenheit ?
+        (display_temperature * 9.0f / 5.0f + 32.0f) : display_temperature;
+    snprintf(temperature_text, sizeof(temperature_text), "%.1fo%s",
+             (double)display_value, display_fahrenheit ? "F" : "C");
     snprintf(humidity_text, sizeof(humidity_text), "%.0f%%", (double)display_humidity);
     const uint16_t temp_color = temperature_color(display_temperature);
     const uint16_t hum_color = humidity_color(display_humidity);
@@ -1804,6 +1970,7 @@ static esp_err_t display_update(void)
             rects[rect_count++] = pointer_rect(shown_co2);
         }
         if (display_measurement_valid && (!display_previous_environment_valid ||
+            display_fahrenheit != display_previous_fahrenheit ||
             temperature_color(display_temperature) != temperature_color(display_previous_temperature) ||
             (int)lroundf(display_temperature * 10.0f) != (int)lroundf(display_previous_temperature * 10.0f))) {
             rects[rect_count++] = (display_rect_t) { 24, 160, 96, 55 };
@@ -1825,6 +1992,7 @@ static esp_err_t display_update(void)
     display_previous_co2 = shown_co2;
     display_previous_co2_valid = true;
     display_previous_temperature = display_temperature;
+    display_previous_fahrenheit = display_fahrenheit;
     display_previous_humidity = display_humidity;
     display_previous_environment_valid = display_measurement_valid;
     display_previous_wifi_visible = wifi_visible;
@@ -2074,7 +2242,7 @@ static esp_err_t display_assets_init(void)
         else {
             static const char *const names[] = {
                 "ppm", "co2_icon", "wifi_icon", "thermometer", "water",
-                "glyph_o", "glyph_C", "glyph_percent", "glyph_dot", "glyph_minus"
+                "glyph_o", "glyph_C", "glyph_percent", "glyph_dot", "glyph_minus", "glyph_F"
             };
             snprintf(path, sizeof(path), "/display/%s.bin", names[id - 20]);
         }
@@ -2558,6 +2726,9 @@ void app_main(void)
         nvs_flash_init()
     );
 
+    load_temperature_display_mode();
+    load_sensor_calibration();
+
 
     ESP_LOGI(
         TAG,
@@ -2829,6 +3000,12 @@ void app_main(void)
             continue;
         }
 
+        const float corrected_temperature =
+            temperature + temperature_calibration_tenths / 10.0f;
+        float corrected_humidity = humidity + humidity_calibration_percent;
+        if (corrected_humidity < 0.0f) corrected_humidity = 0.0f;
+        if (corrected_humidity > 100.0f) corrected_humidity = 100.0f;
+
 
         /*
          * ----------------------------------------------------
@@ -2842,9 +3019,9 @@ void app_main(void)
 
             co2,
 
-            temperature,
+            corrected_temperature,
 
-            humidity,
+            corrected_humidity,
 
             co2_status(co2)
         );
@@ -2858,8 +3035,8 @@ void app_main(void)
 
         draw_measurement(
             co2,
-            temperature,
-            humidity
+            corrected_temperature,
+            corrected_humidity
         );
 
 
@@ -2878,14 +3055,14 @@ void app_main(void)
                 TAG,
                 ">>> Zigbee update attempt: CO2=%u ppm, T=%.1f C, H=%.1f %%",
                 co2,
-                temperature,
-                humidity
+                corrected_temperature,
+                corrected_humidity
             );
 
             zigbee_update_sensor_values(
                 co2,
-                temperature,
-                humidity
+                corrected_temperature,
+                corrected_humidity
             );
 
             last_zigbee_update = now;
