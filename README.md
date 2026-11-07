@@ -26,6 +26,18 @@ An open-source indoor air-quality monitor built around the ESP32-H2 and Sensirio
 | N-channel MOSFET | GC9A01 backlight switching and PWM dimming |
 | Push button | Zigbee factory reset when held for 3 seconds |
 
+### 3D-printable enclosure
+
+The enclosure files are available as STL models in [`hardware/3D Print`](hardware/3D%20Print/). Each preview shows the model from isometric, top, and side views.
+
+**Main enclosure — `BOX_004.stl`**
+
+![Main enclosure STL preview: isometric, top, and side views](hardware/3D%20Print/previews/BOX_004_preview.jpg)
+
+**Top cover — `BOX_top_004.stl`**
+
+![Top cover STL preview: isometric, top, and side views](hardware/3D%20Print/previews/BOX_top_004_preview.jpg)
+
 ### Pin connections
 
 | Signal | ESP32-H2 GPIO | Notes |
