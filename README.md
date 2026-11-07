@@ -9,9 +9,10 @@ An open-source indoor air-quality monitor built around the ESP32-H2 and Sensirio
 - **Ambient light:** a photoresistor divider feeds the ESP32-H2 ADC. The firmware uses the reading both to estimate illuminance for Zigbee and to adjust display brightness.
 - **Automatic backlight:** PWM drives an external N-channel MOSFET to control the GC9A01 backlight. Brightness changes smoothly and is limited to 10–100%.
 - **Round display:** a 240 × 240 GC9A01 screen shows a CO₂ gauge, large numeric reading, temperature, humidity, and Zigbee connection state.
-- **Selectable temperature units:** Celsius is the default; the Zigbee2MQTT temperature display-mode setting changes both the LCD and the MQTT temperature value.
+- **Selectable temperature units:** Celsius is the default. The Zigbee2MQTT `Temperature unit` setting changes the display and the legacy MQTT `temperature` value. The corrected temperature is also published as `temperature_celsius` and `temperature_fahrenheit`; these Home Assistant entities retain their respective units regardless of the installation's unit preference.
+- **Sensor calibration:** temperature offset is adjustable from −5 to +5 °C in 0.1 °C steps; humidity offset is adjustable from −30 to +30 percentage points in steps of 1. Both default to zero, are saved across reboots, and affect the display and Zigbee readings. Temperature calibration is always expressed in Celsius, even when the display uses Fahrenheit.
 - **Antialiased assets:** display glyphs and icons are stored as 4-bpp assets in a SPIFFS partition.
-- **Zigbee OTA support:** the firmware contains an OTA Upgrade client, and the repository includes a Zigbee OTA image packager. See [OTA_README_EN.md](main/OTA_README_EN.md) for setup and release steps.
+- **Zigbee OTA support:** the firmware contains an OTA Upgrade client that validates the received image header before writing the application, and the repository includes a Zigbee OTA image packager. See [OTA_README_EN.md](main/OTA_README_EN.md) for setup and release steps.
 - **PCB fabrication files:** the Gerber archive is in [`hardware/gerber`](hardware/gerber/).
 
 ## Hardware
@@ -57,7 +58,7 @@ Temperature and humidity text and icons change color with the reading:
 
 | Measurement | Color thresholds |
 | --- | --- |
-| Temperature | Below 18 °C: blue; 18–26 °C: green; above 26 °C: red |
+| Temperature | Celsius mode: below 18 °C (64.4 °F): blue; 18–26 °C (64.4–78.8 °F): green; above 26 °C (78.8 °F): red. The thresholds are converted when Fahrenheit is selected. |
 | Relative humidity | Below 30%: red; 30–39%: yellow; 40–60%: green; above 60–70%: yellow; above 70%: red |
 
 The ambient-light sensor is calibrated using two reference readings, so illuminance is an estimate rather than a precision lux-meter measurement. Brightness is filtered and eased toward the target to avoid abrupt changes.
@@ -73,6 +74,7 @@ The firmware creates endpoint 1 with these standard measurement clusters:
 | Relative humidity | `0x0405` |
 | Carbon dioxide | `0x040D` |
 | Temperature display mode | `0x0204` |
+| Device calibration (manufacturer-specific) | `0xFC00` |
 | OTA Upgrade client | `0x0019` |
 
 The device advertises manufacturer `Custom` and model `ESP32H2_CO2`. Zigbee2MQTT can expose the standard readings as device properties. Link quality is provided by the Zigbee network, not measured by the SCD40.
@@ -80,6 +82,12 @@ The device advertises manufacturer `Custom` and model `ESP32H2_CO2`. Zigbee2MQTT
 The device is configured with the Zigbee Router role. Whether it is selected as a parent or route for another device depends on the coordinator, network topology, link quality, and Zigbee routing decisions.
 
 Hold the button on GPIO4 for at least 3 seconds to erase the device's Zigbee network data and restart it. After reboot, permit joining in Zigbee2MQTT to pair it again.
+
+### Temperature and humidity settings
+
+Zigbee2MQTT exposes `Temperature unit`, `Temperature calibration`, and `Humidity calibration` as writable device settings. The temperature unit defaults to Celsius and controls the display plus the legacy MQTT `temperature` field. Calibration defaults to zero and is applied before values are sent to Zigbee and rendered on the display. Temperature correction is an absolute Celsius offset (−5 to +5 °C, step 0.1 °C); humidity correction is an absolute percentage-point offset (−30 to +30, step 1).
+
+For Home Assistant dashboards, use `sensor.co2_temperature_celsius` or `sensor.co2_temperature_fahrenheit` for a specific unit. These fixed-unit entities have no `temperature` device class, so Home Assistant does not convert their values to the installation's preferred unit. The device's display-unit selector and these entities are independent.
 
 ## Partition layout and OTA
 
@@ -89,11 +97,11 @@ The OTA identifiers currently used by the firmware and packager are:
 
 | Setting | Value |
 | --- | --- |
-| `OTA_FILE_VERSION` base value | `0x00010000` |
+| Current `OTA_FILE_VERSION` | `0x00010003` |
 | `OTA_MANUFACTURER_CODE` | `0x1234` |
 | `OTA_IMAGE_TYPE` | `0x5678` |
 
-Increase `OTA_FILE_VERSION` for each released image, and pass the same version to `make_zigbee_ota.py`. The detailed Zigbee2MQTT configuration, image packaging, update, and troubleshooting instructions are in [main/OTA_README_EN.md](main/OTA_README_EN.md).
+Increase `OTA_FILE_VERSION` for every new OTA image and pass the same value to `make_zigbee_ota.py`; it must be greater than the version installed on the device. The detailed Zigbee2MQTT configuration, image packaging, update, and troubleshooting instructions are in [main/OTA_README_EN.md](main/OTA_README_EN.md).
 
 ## Build and flash
 
@@ -133,11 +141,14 @@ The component CMake file creates the SPIFFS image from `main/display_fs` and inc
 ```text
 .
 ├── hardware/gerber/       PCB manufacturing archive
+├── OTA/                   Zigbee OTA image and index
 ├── main/
 │   ├── display_fs/         4-bpp display glyph and icon assets
 │   ├── zigbee_CO2.c        Firmware application
 │   ├── make_zigbee_ota.py  Zigbee OTA image and index packager
 │   └── OTA_README_EN.md    OTA instructions
+├── zigbee2mqtt/
+│   └── ESP32H2_CO2.mjs    External Zigbee2MQTT converter
 ├── partitions.csv         Custom OTA/SPIFFS partition table
 └── CMakeLists.txt         ESP-IDF project entry point
 ```

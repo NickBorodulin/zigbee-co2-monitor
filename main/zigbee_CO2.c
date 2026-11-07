@@ -130,7 +130,7 @@
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010002UL
+#define OTA_FILE_VERSION                0x00010003UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
@@ -231,6 +231,10 @@ static bool ota_update_image_element;
 static uint32_t ota_stream_offset;
 static uint32_t ota_expected_size;
 static uint32_t ota_sub_element_remaining;
+static uint8_t ota_file_header[OTA_HEADER_SIZE];
+static uint8_t ota_file_header_bytes;
+static uint16_t ota_file_header_length;
+static bool ota_file_header_valid;
 static uint8_t ota_sub_element_header[OTA_SUBELEMENT_HEADER_SIZE];
 static uint8_t ota_sub_element_header_bytes;
 
@@ -497,15 +501,78 @@ void esp_zb_app_signal_handler(
 // Создание Zigbee endpoint
 // ============================================================
 
-/* OTA files contain a 56-byte Zigbee OTA header followed by one or more
- * sub-elements. Only sub-element 0x0000 is the ESP-IDF application image. */
+static uint16_t ota_read_u16_le(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
+
+static uint32_t ota_read_u32_le(const uint8_t *data)
+{
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) |
+           ((uint32_t)data[3] << 24);
+}
+
+/* Validate the metadata from the actual OTA byte stream. Some SDK versions
+ * invoke the START callback with an empty ota_header, so it is not a reliable
+ * source for manufacturer, image type, or version at that stage. */
+static esp_err_t ota_validate_file_header(void)
+{
+    const uint16_t header_length = ota_read_u16_le(&ota_file_header[6]);
+    const uint16_t manufacturer_code = ota_read_u16_le(&ota_file_header[10]);
+    const uint16_t image_type = ota_read_u16_le(&ota_file_header[12]);
+    const uint32_t file_version = ota_read_u32_le(&ota_file_header[14]);
+    const uint32_t image_size = ota_read_u32_le(&ota_file_header[52]);
+
+    if (ota_read_u32_le(&ota_file_header[0]) != 0x0BEEF11EU ||
+        header_length < OTA_HEADER_SIZE ||
+        manufacturer_code != OTA_MANUFACTURER_CODE ||
+        image_type != OTA_IMAGE_TYPE ||
+        file_version <= OTA_FILE_VERSION ||
+        image_size < (uint32_t)header_length + OTA_SUBELEMENT_HEADER_SIZE ||
+        (ota_expected_size != 0 && image_size != ota_expected_size) ||
+        image_size > ota_update_partition->size) {
+        ESP_LOGE(ZIGBEE_TAG,
+                 "Rejected OTA file header: manufacturer=0x%04x, image_type=0x%04x, "
+                 "version=0x%08" PRIx32 ", header_size=%u, image_size=%" PRIu32,
+                 (unsigned)manufacturer_code, (unsigned)image_type, file_version,
+                 (unsigned)header_length, image_size);
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+    ota_file_header_length = header_length;
+    ota_expected_size = image_size;
+    ota_file_header_valid = true;
+    ESP_LOGI(ZIGBEE_TAG,
+             "OTA file header accepted: manufacturer=0x%04x, image_type=0x%04x, "
+             "version=0x%08" PRIx32 ", size=%" PRIu32,
+             (unsigned)manufacturer_code, (unsigned)image_type, file_version, image_size);
+    return ESP_OK;
+}
+
+/* OTA files contain a Zigbee OTA header followed by one or more sub-elements.
+ * Only sub-element 0x0000 is the ESP-IDF application image. */
 static esp_err_t ota_write_stream(const uint8_t *data, size_t size)
 {
     size_t pos = 0;
 
     while (pos < size) {
-        if (ota_stream_offset < OTA_HEADER_SIZE) {
-            size_t skip = OTA_HEADER_SIZE - ota_stream_offset;
+        if (!ota_file_header_valid) {
+            size_t copy_size = OTA_HEADER_SIZE - ota_file_header_bytes;
+            if (copy_size > size - pos) copy_size = size - pos;
+            memcpy(&ota_file_header[ota_file_header_bytes], data + pos, copy_size);
+            ota_file_header_bytes += (uint8_t)copy_size;
+            ota_stream_offset += (uint32_t)copy_size;
+            pos += copy_size;
+            if (ota_file_header_bytes < OTA_HEADER_SIZE) continue;
+            ESP_RETURN_ON_ERROR(ota_validate_file_header(), ZIGBEE_TAG,
+                                "Invalid Zigbee OTA file header");
+            continue;
+        }
+
+        if (ota_stream_offset < ota_file_header_length) {
+            size_t skip = ota_file_header_length - ota_stream_offset;
             if (skip > size - pos) skip = size - pos;
             ota_stream_offset += skip;
             pos += skip;
@@ -562,36 +629,23 @@ static esp_err_t zigbee_ota_action_handler(
 
     switch (ota->upgrade_status) {
         case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_START:
-            if (ota->ota_header.manufacturer_code != OTA_MANUFACTURER_CODE ||
-                ota->ota_header.image_type != OTA_IMAGE_TYPE ||
-                ota->ota_header.file_version <= OTA_FILE_VERSION) {
-                ESP_LOGE(ZIGBEE_TAG,
-                         "Rejected OTA image: received manufacturer=0x%04x (expected 0x%04x), "
-                         "image_type=0x%04x (expected 0x%04x), "
-                         "file_version=0x%08" PRIx32 " (must be greater than 0x%08" PRIx32 ")",
-                         (unsigned)ota->ota_header.manufacturer_code,
-                         (unsigned)OTA_MANUFACTURER_CODE,
-                         (unsigned)ota->ota_header.image_type,
-                         (unsigned)OTA_IMAGE_TYPE,
-                         (uint32_t)ota->ota_header.file_version,
-                         (uint32_t)OTA_FILE_VERSION);
-                return ESP_ERR_INVALID_VERSION;
-            }
             ota_update_partition = esp_ota_get_next_update_partition(NULL);
             if (ota_update_partition == NULL) return ESP_ERR_NOT_FOUND;
             ota_stream_offset = 0;
             ota_expected_size = ota->ota_header.image_size;
             ota_sub_element_remaining = 0;
             ota_sub_element_header_bytes = 0;
+            ota_file_header_bytes = 0;
+            ota_file_header_length = 0;
+            ota_file_header_valid = false;
             ota_update_image_element = false;
             ESP_RETURN_ON_ERROR(
                 esp_ota_begin(ota_update_partition, OTA_SIZE_UNKNOWN, &ota_update_handle),
                 ZIGBEE_TAG, "esp_ota_begin failed"
             );
             ota_update_in_progress = true;
-            ESP_LOGI(ZIGBEE_TAG, "OTA started: image version 0x%08" PRIx32
-                     ", size=%" PRIu32, ota->ota_header.file_version,
-                     ota->ota_header.image_size);
+            ESP_LOGI(ZIGBEE_TAG,
+                     "OTA started; validating the received file header before writing firmware");
             break;
 
         case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_RECEIVE:
@@ -603,7 +657,8 @@ static esp_err_t zigbee_ota_action_handler(
             break;
 
         case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_CHECK:
-            if (!ota_update_in_progress || ota_sub_element_header_bytes != 0 ||
+            if (!ota_update_in_progress || !ota_file_header_valid ||
+                ota_sub_element_header_bytes != 0 ||
                 ota_sub_element_remaining != 0 || !ota_update_image_element ||
                 ota_stream_offset != ota_expected_size) {
                 ESP_LOGE(ZIGBEE_TAG, "OTA image stream is incomplete");
@@ -655,7 +710,7 @@ static void load_sensor_calibration(void)
     nvs_handle_t handle;
     int16_t value;
     if (nvs_open("calibration", NVS_READONLY, &handle) == ESP_OK) {
-        if (nvs_get_i16(handle, "temp_tenths", &value) == ESP_OK && value >= -20 && value <= 20)
+        if (nvs_get_i16(handle, "temp_tenths", &value) == ESP_OK && value >= -50 && value <= 50)
             temperature_calibration_tenths = value;
         if (nvs_get_i16(handle, "humidity", &value) == ESP_OK && value >= -30 && value <= 30)
             humidity_calibration_percent = value;
@@ -715,7 +770,7 @@ static esp_err_t zigbee_action_handler(
             attr_message->attribute.data.value != NULL &&
             attr_message->attribute.data.size >= sizeof(int16_t)) {
             const int16_t value = *(const int16_t *)attr_message->attribute.data.value;
-            if (attr_message->attribute.id == SENSOR_CALIBRATION_TEMP_ATTR_ID && value >= -20 && value <= 20) {
+            if (attr_message->attribute.id == SENSOR_CALIBRATION_TEMP_ATTR_ID && value >= -50 && value <= 50) {
                 temperature_calibration_tenths = value;
                 save_sensor_calibration("temp_tenths", value);
                 display_data_dirty = true;

@@ -9,7 +9,7 @@ const calibrationCluster = {
     name: calibrationClusterName,
     ID: 0xFC00,
     attributes: {
-        temperatureCalibration: {name: 'temperatureCalibration', ID: 0x0001, type: Zcl.DataType.INT16, write: true, min: -20, max: 20},
+        temperatureCalibration: {name: 'temperatureCalibration', ID: 0x0001, type: Zcl.DataType.INT16, write: true, min: -50, max: 50},
         humidityCalibration: {name: 'humidityCalibration', ID: 0x0002, type: Zcl.DataType.INT16, write: true, min: -30, max: 30},
     },
     commands: {},
@@ -17,7 +17,8 @@ const calibrationCluster = {
 };
 
 // The unit is a real writable ZCL attribute on the device. Keep a per-device
-// cache so the temperature converter can publish MQTT in the selected unit.
+// cache for the legacy selected-unit property; explicit Celsius and Fahrenheit
+// properties are published together for Home Assistant's fixed unit metadata.
 const temperatureUnits = new Map();
 const ieee = (device) => device?.ieeeAddr ?? 'unknown';
 
@@ -31,7 +32,11 @@ const temperatureConverter = {
         const temperatureC = raw / 100;
         const fahrenheit = temperatureUnits.get(ieee(msg.device)) === 'fahrenheit';
         const temperature = fahrenheit ? temperatureC * 9 / 5 + 32 : temperatureC;
-        return {temperature: Math.round(temperature * 100) / 100};
+        return {
+            temperature: Math.round(temperature * 100) / 100,
+            temperature_celsius: Math.round(temperatureC * 100) / 100,
+            temperature_fahrenheit: Math.round((temperatureC * 9 / 5 + 32) * 100) / 100,
+        };
     },
 };
 
@@ -93,7 +98,7 @@ const setCalibration = {
         const numeric = Number(value);
         if (!Number.isFinite(numeric)) throw new Error(`${key} must be numeric`);
         if (key === 'device_temperature_calibration') {
-            if (numeric < -2 || numeric > 2) throw new Error('Temperature calibration must be between -2 and +2 °C');
+            if (numeric < -5 || numeric > 5) throw new Error('Temperature calibration must be between -5 and +5 °C');
             const raw = Math.round(numeric * 10);
             await entity.write(calibrationClusterName, {temperatureCalibration: raw});
             return {state: {device_temperature_calibration: raw / 10}};
@@ -123,13 +128,25 @@ export default {
                 .withLabel('Temperature')
                 .withDescription('Numeric value in the unit selected by temperature_display_mode.')
                 .withHomeAssistant({icon: 'mdi:thermometer'}),
+            e.numeric('temperature_celsius', ea.STATE)
+                .withLabel('Temperature Celsius').withUnit('°C')
+                .withDescription('Temperature converted to Celsius. Use this sensor when Celsius is selected.')
+                // Keep the reported unit fixed; a temperature device class
+                // would let Home Assistant convert it to the preferred unit.
+                .withHomeAssistant({icon: 'mdi:thermometer'}),
+            e.numeric('temperature_fahrenheit', ea.STATE)
+                .withLabel('Temperature Fahrenheit').withUnit('°F')
+                .withDescription('Temperature converted to Fahrenheit. Use this sensor when Fahrenheit is selected.')
+                // Do not set the temperature device class: Home Assistant
+                // would convert this fixed °F value to the preferred unit.
+                .withHomeAssistant({icon: 'mdi:thermometer'}),
             e.humidity().withHomeAssistant({icon: 'mdi:water-percent'}),
             e.enum('temperature_display_mode', ea.ALL, ['celsius', 'fahrenheit'])
                 .withLabel('Temperature unit')
                 .withDescription('Unit used by the device display and MQTT temperature value.')
                 .withHomeAssistant({icon: 'mdi:temperature-celsius'}),
             e.numeric('device_temperature_calibration', ea.STATE_SET)
-                .withValueMin(-2).withValueMax(2).withValueStep(0.1).withUnit('°C')
+                .withValueMin(-5).withValueMax(5).withValueStep(0.1).withUnit('°C')
                 .withCategory('config').withLabel('Temperature calibration')
                 .withDescription('Absolute offset applied on the device and shown on its display.')
                 .withHomeAssistant({icon: 'mdi:wrench-clock'}),

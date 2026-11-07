@@ -1,105 +1,101 @@
-# Zigbee OTA for the ESP32-H2 CO2 Monitor
+# Zigbee OTA and sensor settings
 
-This firmware includes a Zigbee OTA Upgrade client (ZCL cluster `0x0019`), writes firmware images using the ESP-IDF OTA API, and includes a packager for Zigbee2MQTT OTA files.
+This guide covers the device's temperature and humidity settings, Home Assistant temperature entities, and Zigbee OTA releases through Zigbee2MQTT (Z2M).
 
-## Version fields
+## Temperature units and calibration
 
-- `zcl_version` is the version of the ZCL specification. Keep the SDK value (`0x08`); it is not the firmware release number.
-- `FW_APPLICATION_VERSION` is the one-byte `ApplicationVersion` attribute (`0x0001`) in the Basic cluster. Zigbee2MQTT may display it as the application version.
-- `OTA_FILE_VERSION` is the 32-bit version stored in the OTA cluster and OTA image. Increase it for every release. The current base version in the OTA code is `0x00010000`.
-- `OTA_MANUFACTURER_CODE` (`0x1234`) and `OTA_IMAGE_TYPE` (`0x5678`) must match in the firmware, OTA image, and Zigbee2MQTT index.
+The `Temperature unit` setting in Z2M defaults to `celsius`. It selects the unit shown on the display and used by the legacy MQTT field `temperature`. The device recalculates the display's temperature color thresholds for the selected unit.
 
-For the next release, build the firmware with `OTA_FILE_VERSION` set to `0x00010001`, then package that exact build with `--version 0x00010001`. Increment the value again for each subsequent release. Do not change `zcl_version` to indicate a firmware release.
+The converter also publishes two explicit MQTT properties:
 
-## First installation
+| Property | Unit behavior |
+| --- | --- |
+| `temperature_celsius` | Celsius value, kept in °C in Home Assistant |
+| `temperature_fahrenheit` | Fahrenheit value, kept in °F in Home Assistant |
 
-The previous partition table contained only a `factory` app partition. OTA requires an `otadata` partition and two app slots, `ota_0` and `ota_1`. Flash the OTA-capable firmware and the new partition table over USB for the first installation.
+Use `sensor.co2_temperature_celsius` or `sensor.co2_temperature_fahrenheit` in a Home Assistant card when you want a specific unit. Neither entity has the Home Assistant `temperature` device class, so HA does not convert their values to the preferred unit system. The two values represent the same reading; for example, 26.5 °C is about 79.7 °F.
 
-The Zigbee storage and SPIFFS partitions move to new addresses. After this migration, the device may need to be paired with the Zigbee network again. Reflash the SPIFFS image from the new build so the display fonts and other assets are present.
+Temperature calibration is an absolute offset from −5 to +5 °C in 0.1 °C steps. Humidity calibration is an absolute offset from −30 to +30 percentage points in steps of 1. Both start at zero, are stored in NVS across reboots, and affect the displayed and Zigbee-reported measurements. The temperature correction remains in Celsius regardless of the selected display unit.
 
-The partition table allocates 1280 KiB to each app slot. The previous firmware image was close to 1216 KiB, so check the size of every new build before flashing it.
+For a Fahrenheit temperature gauge, use Fahrenheit values for the gauge bounds and color thresholds as well. The display threshold equivalents are 64.4 °F (18 °C) and 78.8 °F (26 °C).
 
-## Build an OTA image
+## OTA version fields
 
-From the root of the ESP-IDF project, build the firmware:
+- `zcl_version` identifies the Zigbee Cluster Library version. Keep the SDK value; it is not the firmware release number.
+- `FW_APPLICATION_VERSION` is the Basic-cluster `ApplicationVersion` attribute.
+- `OTA_FILE_VERSION` is the 32-bit OTA firmware version. The current repository value is `0x00010003`.
+- `OTA_MANUFACTURER_CODE` (`0x1234`) and `OTA_IMAGE_TYPE` (`0x5678`) must match in the firmware, `.ota` image, and `index.json`.
+
+For each new OTA release, increase `OTA_FILE_VERSION`, build the firmware, and give the same version to the packager. It must be greater than the version installed on the device. For example, the next release after `0x00010003` would use `0x00010004` in both places. Do not reuse a version for different image contents.
+
+## First installation and OTA limits
+
+The partition table provides `otadata` and two 1344 KiB application slots (`ota_0` and `ota_1`). Flash the partition table and the first OTA-capable firmware over USB. OTA then updates the application image only; it does not update the bootloader, partition table, or `display_fs` assets. If display fonts or images change, flash the SPIFFS image separately.
+
+The device validates the manufacturer, image type, version, and declared image size from the received Zigbee OTA file header before writing the application sub-element to the update slot.
+
+## Build and package a Zigbee OTA image
+
+Build the project with ESP-IDF or CLion. The example below uses the CLion output directory; adjust the binary path if your build uses another directory.
 
 ```powershell
 idf.py build
 ```
 
-Package the resulting application binary. The version passed to `--version` must exactly match `OTA_FILE_VERSION` in the firmware source:
+After changing `OTA_FILE_VERSION` in `main/zigbee_CO2.c` to the next release number, package that exact build. This example packages version `0x00010004` into the repository's `OTA` folder and sets a GitHub Raw URL prefix:
 
 ```powershell
-python .\main\make_zigbee_ota.py .\build\zigbee_CO2.bin --version 0x00010001 --output-dir .\ota_release
+python .\main\make_zigbee_ota.py .\cmake-build-debug\zigbee_CO2.bin --version 0x00010004 --output-dir .\OTA --url-prefix "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA"
 ```
 
-The script creates `ota_release\co2-00010001.ota` and `ota_release\index.json`. Increment the version for the next release, for example to `0x00010002`.
+The script creates `OTA/co2-00010004.ota` and updates `OTA/index.json`. Confirm that the firmware version, packager version, header fields, index version, file size, and URL all refer to the same release. Commit and push both the `.ota` file and `index.json` so GitHub Raw can serve them.
 
 ## Configure Zigbee2MQTT
 
-Copy the `ota_release` directory to the Zigbee2MQTT data directory, next to `configuration.yaml`. With Docker, place it inside the host directory mounted as the Zigbee2MQTT data directory so the container can read it.
+There are two ways to make Z2M use the index:
 
-Add this setting to the existing `ota:` section in `configuration.yaml`:
+1. **Local index:** put the OTA files in a directory the Z2M container can read, then set `zigbee_ota_override_index_location` inside the existing top-level `ota:` section in `configuration.yaml`:
 
-```yaml
-ota:
-  zigbee_ota_override_index_location: "ota_release/index.json"
-```
+   ```yaml
+   ota:
+     zigbee_ota_override_index_location: "OTA/index.json"
+   ```
 
-If `configuration.yaml` already has an `ota:` section, add the setting under that section; do not create a second `ota:` key. The OTA image path in `index.json` (`ota_release/co2-<version>.ota`) is relative to the directory containing `configuration.yaml`.
+   The path is relative to the Z2M data directory, where `configuration.yaml` resides. If an `ota:` section already exists, add the setting inside it instead of creating a duplicate. Restart Z2M after changing the configuration.
 
-Restart Zigbee2MQTT after changing the configuration. Then check whether an update is available for the device and start the update.
+2. **GitHub Raw index:** in the device's OTA controls, select the custom index source and enter:
+
+   ```text
+   https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/index.json
+   ```
+
+After changing the source, request an OTA check again. An image will only be offered when its manufacturer, image type, and version match the device and installed firmware.
 
 ## Start an update
 
-In the Zigbee2MQTT interface, open the CO2 device and check for an update. When Zigbee2MQTT reports that an update is available, start it.
-
-You can also check and start an update over MQTT. Replace `CO2` with the device's friendly name or IEEE address if needed.
+In Z2M, open the CO2 device, check for updates, then start the offered update. The same operations are available over MQTT. Replace `CO2` with the device's friendly name or IEEE address if needed.
 
 Check for an update:
 
-Topic:
+```text
+Topic:   zigbee2mqtt/bridge/request/device/ota_update/check
+Payload: {"id":"CO2","url":"https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/index.json"}
+```
+
+Start the update after Z2M reports that a newer image is available:
 
 ```text
-zigbee2mqtt/bridge/request/device/ota_update/check
+Topic:   zigbee2mqtt/bridge/request/device/ota_update/update
+Payload: {"id":"CO2"}
 ```
 
-Payload:
+Keep the monitor powered until Z2M reports completion and the device restarts. Verify the firmware version and sensor reports after reboot. Re-pairing is normally unnecessary because Zigbee data is stored in its own partition.
 
-```json
-{"id":"CO2"}
-```
+## Troubleshooting and limits
 
-Start the update:
+- **No image available:** verify that `OTA_FILE_VERSION`, the packager's `--version`, and `index.json` `fileVersion` match, and that the OTA version is higher than the installed version.
+- **Index or download error:** open the index URL and the `.ota` URL from the index to confirm both are reachable. Check that the image file was pushed to the same branch and path.
+- **Device rejects the image:** inspect the serial log for manufacturer, image type, version, and OTA-header errors. The identifiers must be `0x1234` and `0x5678`, and the image version must be newer than the running firmware.
+- **Download timeout:** keep the device powered and close to the Zigbee network. A timeout means the transfer did not complete; use the serial log to identify whether the device rejected the image or stopped receiving blocks.
 
-Topic:
-
-```text
-zigbee2mqtt/bridge/request/device/ota_update/update
-```
-
-Payload:
-
-```json
-{"id":"CO2"}
-```
-
-## During and after the update
-
-Keep the device powered and do not disconnect it until Zigbee2MQTT reports that the update has completed. The device state should show `update.state: "updating"` and progress. After the transfer, the ESP32-H2 reboots into the updated firmware. The process can take a while; its duration depends on the device and Zigbee network quality.
-
-After reboot, check the serial log for application startup, confirm that the device is present in the Zigbee network, and verify that new readings appear in Zigbee2MQTT. Re-pairing is normally not required because Zigbee data is stored in a separate partition.
-
-If Zigbee2MQTT does not find an update, check that:
-
-1. `OTA_FILE_VERSION` in the firmware matches the version passed to the packager.
-2. The new OTA version is greater than the version currently installed.
-3. Zigbee2MQTT can read both `index.json` and the `.ota` file at the configured paths.
-
-Zigbee2MQTT may not offer an image whose version is equal to or lower than the installed version.
-
-## Scope and validation
-
-OTA updates transfer the application image only. They do not update the bootloader, partition table, or `display_fs` filesystem. If fonts or other display assets change, their filesystem image must be updated separately.
-
-The firmware source and OTA partition table are included in this repository. The OTA transfer itself should be tested on the device before treating the OTA process as verified.
+OTA transfer should be validated on the target device before relying on unattended updates. It cannot update the bootloader, partition table, or display filesystem.
