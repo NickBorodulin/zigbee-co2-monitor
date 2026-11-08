@@ -23,10 +23,10 @@ For a Fahrenheit temperature gauge, use Fahrenheit values for the gauge bounds a
 
 - `zcl_version` identifies the Zigbee Cluster Library version. Keep the SDK value; it is not the firmware release number.
 - `FW_APPLICATION_VERSION` is the Basic-cluster `ApplicationVersion` attribute.
-- `OTA_FILE_VERSION` is the 32-bit OTA firmware version. The current repository value is `0x00010003`.
+- `OTA_FILE_VERSION` is the 32-bit OTA firmware version. The current repository value is `0x00010004`.
 - `OTA_MANUFACTURER_CODE` (`0x1234`) and `OTA_IMAGE_TYPE` (`0x5678`) must match in the firmware, `.ota` image, and `index.json`.
 
-For each new OTA release, increase `OTA_FILE_VERSION`, build the firmware, and give the same version to the packager. It must be greater than the version installed on the device. For example, the next release after `0x00010003` would use `0x00010004` in both places. Do not reuse a version for different image contents.
+For each new OTA release, increase `OTA_FILE_VERSION`, build the firmware, and give the same version to the packager. It must be greater than the version installed on the device. Do not reuse a version for different image contents.
 
 ## First installation and OTA limits
 
@@ -42,13 +42,13 @@ Build the project with ESP-IDF or CLion. The example below uses the CLion output
 idf.py build
 ```
 
-After changing `OTA_FILE_VERSION` in `main/zigbee_CO2.c` to the next release number, package that exact build. This example packages version `0x00010004` into the repository's `OTA` folder and sets a GitHub Raw URL prefix:
+After changing `OTA_FILE_VERSION` in `main/zigbee_CO2.c` to the next release number, package that exact build. This example packages version `0x00010005` into the repository's `OTA` folder and sets a GitHub Raw URL prefix:
 
 ```powershell
-python .\main\make_zigbee_ota.py .\cmake-build-debug\zigbee_CO2.bin --version 0x00010004 --output-dir .\OTA --url-prefix "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA"
+python .\main\make_zigbee_ota.py .\cmake-build-debug\zigbee_CO2.bin --version 0x00010005 --output-dir .\OTA --url-prefix "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA"
 ```
 
-The script creates `OTA/co2-00010004.ota` and updates `OTA/index.json`. Confirm that the firmware version, packager version, header fields, index version, file size, and URL all refer to the same release. Commit and push both the `.ota` file and `index.json` so GitHub Raw can serve them.
+The script creates `OTA/co2-00010005.ota` and updates `OTA/index.json`. Confirm that the firmware version, packager version, header fields, index version, file size, and URL all refer to the same release. Commit and push both the `.ota` file and `index.json` so GitHub Raw can serve them.
 
 ## Configure Zigbee2MQTT
 

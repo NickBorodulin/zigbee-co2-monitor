@@ -23,10 +23,10 @@
 
 - `zcl_version` — версия Zigbee Cluster Library. Оставьте значение SDK; это не номер выпуска прошивки.
 - `FW_APPLICATION_VERSION` — атрибут `ApplicationVersion` кластера Basic.
-- `OTA_FILE_VERSION` — 32-битная версия OTA-прошивки. В текущем исходнике репозитория указано `0x00010003`.
+- `OTA_FILE_VERSION` — 32-битная версия OTA-прошивки. В текущем исходнике репозитория указано `0x00010004`.
 - `OTA_MANUFACTURER_CODE` (`0x1234`) и `OTA_IMAGE_TYPE` (`0x5678`) должны совпадать в прошивке, `.ota`-файле и `index.json`.
 
-Для каждого нового OTA-выпуска увеличивайте `OTA_FILE_VERSION`, собирайте прошивку и передавайте упаковщику ту же версию. Она должна быть выше версии, установленной на устройстве. Например, следующая версия после `0x00010003` — `0x00010004`; это значение нужно указать и в исходнике, и при упаковке. Не используйте одну версию для разных образов.
+Для каждого нового OTA-выпуска увеличивайте `OTA_FILE_VERSION`, собирайте прошивку и передавайте упаковщику ту же версию. Она должна быть выше версии, установленной на устройстве. Не используйте одну версию для разных образов.
 
 ## Первая прошивка и ограничения OTA
 
@@ -42,13 +42,13 @@
 idf.py build
 ```
 
-Измените `OTA_FILE_VERSION` в `main/zigbee_CO2.c` на номер следующего выпуска и упакуйте именно эту сборку. Пример создаёт версию `0x00010004` в папке `OTA` и прописывает ссылку GitHub Raw:
+Измените `OTA_FILE_VERSION` в `main/zigbee_CO2.c` на номер следующего выпуска и упакуйте именно эту сборку. Пример создаёт версию `0x00010005` в папке `OTA` и прописывает ссылку GitHub Raw:
 
 ```powershell
-python .\main\make_zigbee_ota.py .\cmake-build-debug\zigbee_CO2.bin --version 0x00010004 --output-dir .\OTA --url-prefix "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA"
+python .\main\make_zigbee_ota.py .\cmake-build-debug\zigbee_CO2.bin --version 0x00010005 --output-dir .\OTA --url-prefix "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA"
 ```
 
-Скрипт создаст `OTA/co2-00010004.ota` и обновит `OTA/index.json`. Проверьте, что версия в прошивке, параметр упаковщика, заголовок OTA, версия в индексе, размер и URL соответствуют одному выпуску. Отправьте в GitHub и `.ota`-файл, и `index.json`.
+Скрипт создаст `OTA/co2-00010005.ota` и обновит `OTA/index.json`. Проверьте, что версия в прошивке, параметр упаковщика, заголовок OTA, версия в индексе, размер и URL соответствуют одному выпуску. Отправьте в GitHub и `.ota`-файл, и `index.json`.
 
 ## Настройка Zigbee2MQTT
 

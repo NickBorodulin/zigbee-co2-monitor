@@ -130,7 +130,7 @@
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010003UL
+#define OTA_FILE_VERSION                0x00010004UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
@@ -228,13 +228,10 @@ static const esp_partition_t *ota_update_partition;
 static esp_ota_handle_t ota_update_handle;
 static bool ota_update_in_progress;
 static bool ota_update_image_element;
+static bool ota_metadata_valid;
 static uint32_t ota_stream_offset;
 static uint32_t ota_expected_size;
 static uint32_t ota_sub_element_remaining;
-static uint8_t ota_file_header[OTA_HEADER_SIZE];
-static uint8_t ota_file_header_bytes;
-static uint16_t ota_file_header_length;
-static bool ota_file_header_valid;
 static uint8_t ota_sub_element_header[OTA_SUBELEMENT_HEADER_SIZE];
 static uint8_t ota_sub_element_header_bytes;
 
@@ -501,84 +498,53 @@ void esp_zb_app_signal_handler(
 // Создание Zigbee endpoint
 // ============================================================
 
-static uint16_t ota_read_u16_le(const uint8_t *data)
+/* The Zigbee stack removes the 56-byte OTA file header before delivering
+ * RECEIVE payloads, but leaves the sub-element header in the byte stream.
+ * START may have an empty ota_header on some SDK versions, so retry validation
+ * on subsequent callbacks and require metadata by CHECK. */
+static esp_err_t ota_validate_callback_header(const esp_zb_ota_file_header_t *header)
 {
-    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-}
+    if (header == NULL) return ESP_ERR_INVALID_ARG;
 
-static uint32_t ota_read_u32_le(const uint8_t *data)
-{
-    return (uint32_t)data[0] |
-           ((uint32_t)data[1] << 8) |
-           ((uint32_t)data[2] << 16) |
-           ((uint32_t)data[3] << 24);
-}
+    if (header->manufacturer_code == 0 && header->image_type == 0 &&
+        header->file_version == 0 && header->image_size == 0) {
+        return ESP_OK; /* Metadata is not populated yet; try again later. */
+    }
 
-/* Validate the metadata from the actual OTA byte stream. Some SDK versions
- * invoke the START callback with an empty ota_header, so it is not a reliable
- * source for manufacturer, image type, or version at that stage. */
-static esp_err_t ota_validate_file_header(void)
-{
-    const uint16_t header_length = ota_read_u16_le(&ota_file_header[6]);
-    const uint16_t manufacturer_code = ota_read_u16_le(&ota_file_header[10]);
-    const uint16_t image_type = ota_read_u16_le(&ota_file_header[12]);
-    const uint32_t file_version = ota_read_u32_le(&ota_file_header[14]);
-    const uint32_t image_size = ota_read_u32_le(&ota_file_header[52]);
-
-    if (ota_read_u32_le(&ota_file_header[0]) != 0x0BEEF11EU ||
-        header_length < OTA_HEADER_SIZE ||
-        manufacturer_code != OTA_MANUFACTURER_CODE ||
-        image_type != OTA_IMAGE_TYPE ||
-        file_version <= OTA_FILE_VERSION ||
-        image_size < (uint32_t)header_length + OTA_SUBELEMENT_HEADER_SIZE ||
-        (ota_expected_size != 0 && image_size != ota_expected_size) ||
-        image_size > ota_update_partition->size) {
+    const uint32_t image_size = header->image_size;
+    const uint32_t max_ota_size = ota_update_partition->size +
+                                  OTA_HEADER_SIZE + OTA_SUBELEMENT_HEADER_SIZE;
+    if (header->manufacturer_code != OTA_MANUFACTURER_CODE ||
+        header->image_type != OTA_IMAGE_TYPE ||
+        header->file_version <= OTA_FILE_VERSION ||
+        header->field_control != 0 ||
+        image_size <= OTA_HEADER_SIZE + OTA_SUBELEMENT_HEADER_SIZE ||
+        image_size > max_ota_size) {
         ESP_LOGE(ZIGBEE_TAG,
                  "Rejected OTA file header: manufacturer=0x%04x, image_type=0x%04x, "
-                 "version=0x%08" PRIx32 ", header_size=%u, image_size=%" PRIu32,
-                 (unsigned)manufacturer_code, (unsigned)image_type, file_version,
-                 (unsigned)header_length, image_size);
+                 "version=0x%08" PRIx32 ", image_size=%" PRIu32,
+                 (unsigned)header->manufacturer_code, (unsigned)header->image_type,
+                 header->file_version, image_size);
         return ESP_ERR_INVALID_VERSION;
     }
 
-    ota_file_header_length = header_length;
-    ota_expected_size = image_size;
-    ota_file_header_valid = true;
+    ota_expected_size = image_size - OTA_HEADER_SIZE;
+    ota_metadata_valid = true;
     ESP_LOGI(ZIGBEE_TAG,
              "OTA file header accepted: manufacturer=0x%04x, image_type=0x%04x, "
              "version=0x%08" PRIx32 ", size=%" PRIu32,
-             (unsigned)manufacturer_code, (unsigned)image_type, file_version, image_size);
+             (unsigned)header->manufacturer_code, (unsigned)header->image_type,
+             header->file_version, image_size);
     return ESP_OK;
 }
 
-/* OTA files contain a Zigbee OTA header followed by one or more sub-elements.
- * Only sub-element 0x0000 is the ESP-IDF application image. */
+/* RECEIVE payload starts after the OTA file header. It still contains the
+ * 6-byte sub-element header, followed by the ESP-IDF application image. */
 static esp_err_t ota_write_stream(const uint8_t *data, size_t size)
 {
     size_t pos = 0;
 
     while (pos < size) {
-        if (!ota_file_header_valid) {
-            size_t copy_size = OTA_HEADER_SIZE - ota_file_header_bytes;
-            if (copy_size > size - pos) copy_size = size - pos;
-            memcpy(&ota_file_header[ota_file_header_bytes], data + pos, copy_size);
-            ota_file_header_bytes += (uint8_t)copy_size;
-            ota_stream_offset += (uint32_t)copy_size;
-            pos += copy_size;
-            if (ota_file_header_bytes < OTA_HEADER_SIZE) continue;
-            ESP_RETURN_ON_ERROR(ota_validate_file_header(), ZIGBEE_TAG,
-                                "Invalid Zigbee OTA file header");
-            continue;
-        }
-
-        if (ota_stream_offset < ota_file_header_length) {
-            size_t skip = ota_file_header_length - ota_stream_offset;
-            if (skip > size - pos) skip = size - pos;
-            ota_stream_offset += skip;
-            pos += skip;
-            continue;
-        }
-
         if (ota_sub_element_remaining == 0) {
             while (pos < size && ota_sub_element_header_bytes < OTA_SUBELEMENT_HEADER_SIZE) {
                 ota_sub_element_header[ota_sub_element_header_bytes++] = data[pos++];
@@ -595,6 +561,7 @@ static esp_err_t ota_write_stream(const uint8_t *data, size_t size)
             ota_update_image_element = tag == 0x0000;
             ota_sub_element_header_bytes = 0;
             if (ota_sub_element_remaining == 0) return ESP_ERR_INVALID_SIZE;
+            if (!ota_update_image_element) return ESP_ERR_NOT_SUPPORTED;
             continue;
         }
 
@@ -632,32 +599,36 @@ static esp_err_t zigbee_ota_action_handler(
             ota_update_partition = esp_ota_get_next_update_partition(NULL);
             if (ota_update_partition == NULL) return ESP_ERR_NOT_FOUND;
             ota_stream_offset = 0;
-            ota_expected_size = ota->ota_header.image_size;
+            ota_expected_size = 0;
+            ota_metadata_valid = false;
             ota_sub_element_remaining = 0;
             ota_sub_element_header_bytes = 0;
-            ota_file_header_bytes = 0;
-            ota_file_header_length = 0;
-            ota_file_header_valid = false;
             ota_update_image_element = false;
+            ESP_RETURN_ON_ERROR(ota_validate_callback_header(&ota->ota_header),
+                                ZIGBEE_TAG, "Invalid OTA callback header");
             ESP_RETURN_ON_ERROR(
                 esp_ota_begin(ota_update_partition, OTA_SIZE_UNKNOWN, &ota_update_handle),
                 ZIGBEE_TAG, "esp_ota_begin failed"
             );
             ota_update_in_progress = true;
             ESP_LOGI(ZIGBEE_TAG,
-                     "OTA started; validating the received file header before writing firmware");
+                     "OTA started; validating metadata and OTA application stream");
             break;
 
         case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_RECEIVE:
             if (!ota_update_in_progress || ota->payload == NULL || ota->payload_size == 0) {
                 return ESP_ERR_INVALID_STATE;
             }
+            ESP_RETURN_ON_ERROR(ota_validate_callback_header(&ota->ota_header),
+                                ZIGBEE_TAG, "Invalid OTA callback header");
             ESP_RETURN_ON_ERROR(ota_write_stream(ota->payload, ota->payload_size),
                                 ZIGBEE_TAG, "Failed to process OTA data block");
             break;
 
         case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_CHECK:
-            if (!ota_update_in_progress || !ota_file_header_valid ||
+            ESP_RETURN_ON_ERROR(ota_validate_callback_header(&ota->ota_header),
+                                ZIGBEE_TAG, "Invalid OTA callback header");
+            if (!ota_update_in_progress || !ota_metadata_valid ||
                 ota_sub_element_header_bytes != 0 ||
                 ota_sub_element_remaining != 0 || !ota_update_image_element ||
                 ota_stream_offset != ota_expected_size) {
@@ -2616,7 +2587,11 @@ static void zigbee_report_attr(uint16_t cluster_id, uint16_t attribute_id, const
     report_cmd.clusterID = cluster_id;
     report_cmd.attributeID = attribute_id;
 
-    esp_zb_lock_acquire(portMAX_DELAY);
+    /* Never let a stalled Zigbee stack block the sensor loop indefinitely. */
+    if (esp_zb_lock_acquire(pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(ZIGBEE_TAG, "%s report skipped: could not acquire Zigbee lock", name);
+        return;
+    }
     esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&report_cmd);
     esp_zb_lock_release();
 
