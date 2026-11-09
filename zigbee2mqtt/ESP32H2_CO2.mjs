@@ -16,12 +16,6 @@ const calibrationCluster = {
     commandsResponse: {},
 };
 
-// The unit is a real writable ZCL attribute on the device. Keep a per-device
-// cache for the legacy selected-unit property; explicit Celsius and Fahrenheit
-// properties are published together for Home Assistant's fixed unit metadata.
-const temperatureUnits = new Map();
-const ieee = (device) => device?.ieeeAddr ?? 'unknown';
-
 const temperatureConverter = {
     cluster: 'msTemperatureMeasurement',
     type: ['attributeReport', 'readResponse'],
@@ -30,10 +24,7 @@ const temperatureConverter = {
         if (typeof raw !== 'number' || raw === 0x8000) return;
 
         const temperatureC = raw / 100;
-        const fahrenheit = temperatureUnits.get(ieee(msg.device)) === 'fahrenheit';
-        const temperature = fahrenheit ? temperatureC * 9 / 5 + 32 : temperatureC;
         return {
-            temperature: Math.round(temperature * 100) / 100,
             temperature_celsius: Math.round(temperatureC * 100) / 100,
             temperature_fahrenheit: Math.round((temperatureC * 9 / 5 + 32) * 100) / 100,
         };
@@ -58,20 +49,18 @@ const temperatureDisplayModeConverter = {
         const raw = msg.data.tempDisplayMode;
         if (raw !== 0 && raw !== 1) return;
         const mode = raw === 1 ? 'fahrenheit' : 'celsius';
-        temperatureUnits.set(ieee(msg.device), mode);
         return {temperature_display_mode: mode};
     },
 };
 
 const setTemperatureDisplayMode = {
     key: ['temperature_display_mode'],
-    convertSet: async (entity, key, value, meta) => {
+    convertSet: async (entity, key, value) => {
         if (value !== 'celsius' && value !== 'fahrenheit') {
             throw new Error(`Unsupported temperature display mode: ${value}`);
         }
         const raw = value === 'fahrenheit' ? 1 : 0;
         await entity.write('hvacUserInterfaceCfg', {tempDisplayMode: raw});
-        temperatureUnits.set(ieee(meta.device), value);
         return {state: {temperature_display_mode: value}};
     },
     convertGet: async (entity) => {
@@ -124,10 +113,6 @@ export default {
     extend: [m.co2(), m.illuminance(), m.deviceAddCustomCluster(calibrationClusterName, calibrationCluster)],
     exposes: () => {
         return [
-            e.numeric('temperature', ea.STATE)
-                .withLabel('Temperature')
-                .withDescription('Numeric value in the unit selected by temperature_display_mode.')
-                .withHomeAssistant({icon: 'mdi:thermometer'}),
             e.numeric('temperature_celsius', ea.STATE)
                 .withLabel('Temperature Celsius').withUnit('°C')
                 .withDescription('Temperature converted to Celsius. Use this sensor when Celsius is selected.')
@@ -143,7 +128,7 @@ export default {
             e.humidity().withHomeAssistant({icon: 'mdi:water-percent'}),
             e.enum('temperature_display_mode', ea.ALL, ['celsius', 'fahrenheit'])
                 .withLabel('Temperature unit')
-                .withDescription('Unit used by the device display and MQTT temperature value.')
+                .withDescription('Unit used by the device display.')
                 .withHomeAssistant({icon: 'mdi:temperature-celsius'}),
             e.numeric('device_temperature_calibration', ea.STATE_SET)
                 .withValueMin(-5).withValueMax(5).withValueStep(0.1).withUnit('°C')

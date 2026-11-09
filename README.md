@@ -9,7 +9,7 @@ An open-source indoor air-quality monitor built around the ESP32-H2 and Sensirio
 - **Ambient light:** a photoresistor divider feeds the ESP32-H2 ADC. The firmware uses the reading both to estimate illuminance for Zigbee and to adjust display brightness.
 - **Automatic backlight:** PWM drives an external N-channel MOSFET to control the GC9A01 backlight. Brightness changes smoothly and is limited to 10–100%.
 - **Round display:** a 240 × 240 GC9A01 screen shows a CO₂ gauge, large numeric reading, temperature, humidity, and Zigbee connection state.
-- **Selectable temperature units:** Celsius is the default. The Zigbee2MQTT `Temperature unit` setting changes the display and the legacy MQTT `temperature` value. The corrected temperature is also published as `temperature_celsius` and `temperature_fahrenheit`; these Home Assistant entities retain their respective units regardless of the installation's unit preference.
+- **Selectable temperature units:** Celsius is the default. The Zigbee2MQTT `Temperature unit` setting changes the display. Corrected temperature is published as separate fixed-unit `temperature_celsius` and `temperature_fahrenheit` properties for Home Assistant; the display setting does not change them.
 - **Sensor calibration:** temperature offset is adjustable from −5 to +5 °C in 0.1 °C steps; humidity offset is adjustable from −30 to +30 percentage points in steps of 1. Both default to zero, are saved across reboots, and affect the display and Zigbee readings. Temperature calibration is always expressed in Celsius, even when the display uses Fahrenheit.
 - **Antialiased assets:** display glyphs and icons are stored as 4-bpp assets in a SPIFFS partition.
 - **Zigbee OTA support:** the firmware contains an OTA Upgrade client that validates the received image header before writing the application, and the repository includes a Zigbee OTA image packager. See [OTA_README_EN.md](main/OTA_README_EN.md) for setup and release steps.
@@ -97,7 +97,7 @@ Hold the button on GPIO4 for at least 3 seconds to erase the device's Zigbee net
 
 ### Temperature and humidity settings
 
-Zigbee2MQTT exposes `Temperature unit`, `Temperature calibration`, and `Humidity calibration` as writable device settings. The temperature unit defaults to Celsius and controls the display plus the legacy MQTT `temperature` field. Calibration defaults to zero and is applied before values are sent to Zigbee and rendered on the display. Temperature correction is an absolute Celsius offset (−5 to +5 °C, step 0.1 °C); humidity correction is an absolute percentage-point offset (−30 to +30, step 1).
+Zigbee2MQTT exposes `Temperature unit`, `Temperature calibration`, and `Humidity calibration` as writable device settings. The temperature unit defaults to Celsius and controls the display. Calibration defaults to zero and is applied before values are sent to Zigbee and rendered on the display. Temperature correction is an absolute Celsius offset (−5 to +5 °C, step 0.1 °C); humidity correction is an absolute percentage-point offset (−30 to +30, step 1).
 
 For Home Assistant dashboards, use `sensor.co2_temperature_celsius` or `sensor.co2_temperature_fahrenheit` for a specific unit. These fixed-unit entities have no `temperature` device class, so Home Assistant does not convert their values to the installation's preferred unit. The device's display-unit selector and these entities are independent.
 

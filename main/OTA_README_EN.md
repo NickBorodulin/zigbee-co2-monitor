@@ -4,7 +4,7 @@ This guide covers the device's temperature and humidity settings, Home Assistant
 
 ## Temperature units and calibration
 
-The `Temperature unit` setting in Z2M defaults to `celsius`. It selects the unit shown on the display and used by the legacy MQTT field `temperature`. The device recalculates the display's temperature color thresholds for the selected unit.
+The `Temperature unit` setting in Z2M defaults to `celsius` and selects the unit shown on the display. The device recalculates the display's temperature color thresholds for the selected unit. Home Assistant receives separate fixed-unit MQTT properties for Celsius and Fahrenheit; changing the display unit does not change these properties.
 
 The converter also publishes two explicit MQTT properties:
 

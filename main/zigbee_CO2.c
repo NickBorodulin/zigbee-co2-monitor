@@ -130,7 +130,7 @@
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010004UL
+#define OTA_FILE_VERSION                0x00010005UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
@@ -432,9 +432,11 @@ void esp_zb_app_signal_handler(
             break;
 
         case ESP_ZB_NWK_SIGNAL_NO_ACTIVE_LINKS_LEFT:
-            zigbee_network_joined = false;
-            zigbee_network_joining = false;
-            ESP_LOGW(ZIGBEE_TAG, "No active Zigbee links; reports paused");
+            /* This reports expired neighbor routes, not that this device left
+             * the Zigbee network. Keep reporting enabled so the stack can
+             * rediscover routes without requiring a device reboot. */
+            ESP_LOGW(ZIGBEE_TAG,
+                     "No active Zigbee neighbor routes; staying joined and retrying reports");
             break;
 
         case ESP_ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
