@@ -23,7 +23,7 @@ For a Fahrenheit temperature gauge, use Fahrenheit values for the gauge bounds a
 
 - `zcl_version` identifies the Zigbee Cluster Library version. Keep the SDK value; it is not the firmware release number.
 - `FW_APPLICATION_VERSION` is the Basic-cluster `ApplicationVersion` attribute.
-- `OTA_FILE_VERSION` is the 32-bit OTA firmware version. The current repository value is `0x00010004`.
+- `OTA_FILE_VERSION` is the 32-bit OTA firmware version. The current repository value is `0x00010005`.
 - `OTA_MANUFACTURER_CODE` (`0x1234`) and `OTA_IMAGE_TYPE` (`0x5678`) must match in the firmware, `.ota` image, and `index.json`.
 
 For each new OTA release, increase `OTA_FILE_VERSION`, build the firmware, and give the same version to the packager. It must be greater than the version installed on the device. Do not reuse a version for different image contents.

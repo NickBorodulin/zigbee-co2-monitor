@@ -109,7 +109,7 @@ STL-модели корпуса находятся в папке [`hardware/3D P
 
 | Параметр | Значение |
 | --- | --- |
-| Текущее значение `OTA_FILE_VERSION` | `0x00010004` |
+| Текущее значение `OTA_FILE_VERSION` | `0x00010005` |
 | `OTA_MANUFACTURER_CODE` | `0x1234` |
 | `OTA_IMAGE_TYPE` | `0x5678` |
 

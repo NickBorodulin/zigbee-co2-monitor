@@ -109,7 +109,7 @@ The OTA identifiers currently used by the firmware and packager are:
 
 | Setting | Value |
 | --- | --- |
-| Current `OTA_FILE_VERSION` | `0x00010004` |
+| Current `OTA_FILE_VERSION` | `0x00010005` |
 | `OTA_MANUFACTURER_CODE` | `0x1234` |
 | `OTA_IMAGE_TYPE` | `0x5678` |
 

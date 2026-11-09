@@ -530,7 +530,9 @@ static esp_err_t ota_validate_callback_header(const esp_zb_ota_file_header_t *he
         return ESP_ERR_INVALID_VERSION;
     }
 
-    ota_expected_size = image_size - OTA_HEADER_SIZE;
+    /* The Zigbee stack has already removed the 56-byte OTA file header and
+     * reports image_size as the remaining stream length in the callback. */
+    ota_expected_size = image_size;
     ota_metadata_valid = true;
     ESP_LOGI(ZIGBEE_TAG,
              "OTA file header accepted: manufacturer=0x%04x, image_type=0x%04x, "
@@ -634,7 +636,13 @@ static esp_err_t zigbee_ota_action_handler(
                 ota_sub_element_header_bytes != 0 ||
                 ota_sub_element_remaining != 0 || !ota_update_image_element ||
                 ota_stream_offset != ota_expected_size) {
-                ESP_LOGE(ZIGBEE_TAG, "OTA image stream is incomplete");
+                ESP_LOGE(ZIGBEE_TAG,
+                         "OTA image stream is incomplete: metadata=%d, offset=%" PRIu32
+                         "/%" PRIu32 ", subelement_header_bytes=%u, "
+                         "subelement_remaining=%" PRIu32 ", image_element=%d",
+                         ota_metadata_valid, ota_stream_offset, ota_expected_size,
+                         (unsigned)ota_sub_element_header_bytes,
+                         ota_sub_element_remaining, ota_update_image_element);
                 return ESP_ERR_INVALID_SIZE;
             }
             break;
