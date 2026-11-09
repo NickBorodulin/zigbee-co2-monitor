@@ -1,10 +1,10 @@
 [
   {
-    "fileVersion": 65540,
-    "fileSize": 1330814,
+    "fileVersion": 65541,
+    "fileSize": 1330830,
     "manufacturerCode": 4660,
     "imageType": 22136,
-    "sha512": "b677b0e4c5e724b799ecb62adbf42549262fc00afc1a251b9515a11e9f9be4dbeb010e83e516e4c68e5339c22991fe0fc40ee17c723fc2b4587b25d010e4648a",
-    "url": "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/co2-00010004.ota"
+    "sha512": "a95c6c199edc6598e7a2e481157c715a59daa8a0cbe91a3318461c50988a952015f0cda226e65895d5828c70621decc351cd99acdf3facbb44d062ccd49d1b8d",
+    "url": "https://raw.githubusercontent.com/NickBorodulin/zigbee-co2-monitor/main/OTA/co2-00010005.ota"
   }
 ]
