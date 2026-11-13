@@ -69,6 +69,8 @@
 // ------------------------------------------------------------
 
 #define SCD40_ADDRESS   0x62
+#define SCD40_STARTUP_SETTLE_DELAY_MS 500
+#define FIRST_ZIGBEE_REPORT_DELAY_MS 10000
 
 
 // ------------------------------------------------------------
@@ -2764,6 +2766,8 @@ static void zigbee_update_sensor_values(
 
 void app_main(void)
 {
+    const TickType_t app_start_tick = xTaskGetTickCount();
+
     /*
      * --------------------------------------------------------
      * NVS
@@ -2922,6 +2926,10 @@ void app_main(void)
         "SCD40 periodic measurement started"
     );
 
+    ESP_LOGI(TAG, "Waiting %u ms for SCD40 startup stabilization",
+             (unsigned)SCD40_STARTUP_SETTLE_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(SCD40_STARTUP_SETTLE_DELAY_MS));
+
 
     /*
      * --------------------------------------------------------
@@ -2964,6 +2972,7 @@ void app_main(void)
      */
     TickType_t last_zigbee_update = 0;
     #define ZIGBEE_UPDATE_INTERVAL_MS 60000
+    bool skip_first_valid_measurement = true;
 
     while (true) {
 
@@ -2980,11 +2989,16 @@ void app_main(void)
 
         if (ret != ESP_OK) {
 
-            ESP_LOGE(
-                TAG,
-                "Data ready check failed: %s",
-                esp_err_to_name(ret)
-            );
+            if (ret == ESP_ERR_INVALID_CRC) {
+                ESP_LOGW(TAG,
+                         "SCD40 data-ready CRC-8 error; retrying readiness check");
+            } else {
+                ESP_LOGE(
+                    TAG,
+                    "Data ready check failed: %s",
+                    esp_err_to_name(ret)
+                );
+            }
 
 
             vTaskDelay(
@@ -3033,11 +3047,17 @@ void app_main(void)
 
         if (ret != ESP_OK) {
 
-            ESP_LOGE(
-                TAG,
-                "SCD40 read measurement failed: %s",
-                esp_err_to_name(ret)
-            );
+            if (ret == ESP_ERR_INVALID_CRC) {
+                ESP_LOGW(TAG,
+                         "SCD40 CRC-8 mismatch; discarded the complete CO2/temperature/humidity sample; "
+                         "will retry when the next sample is ready");
+            } else {
+                ESP_LOGE(
+                    TAG,
+                    "SCD40 read measurement failed: %s",
+                    esp_err_to_name(ret)
+                );
+            }
 
 
             vTaskDelay(
@@ -3045,6 +3065,14 @@ void app_main(void)
             );
 
 
+            continue;
+        }
+
+        if (skip_first_valid_measurement) {
+            skip_first_valid_measurement = false;
+            ESP_LOGI(TAG,
+                     "Discarding the first valid SCD40 measurement after startup");
+            vTaskDelay(pdMS_TO_TICKS(250));
             continue;
         }
 
@@ -3094,11 +3122,12 @@ void app_main(void)
 
         TickType_t now = xTaskGetTickCount();
 
-        if (zigbee_network_joined && (
-            last_zigbee_update == 0 ||
-            (now - last_zigbee_update) >=
-                pdMS_TO_TICKS(ZIGBEE_UPDATE_INTERVAL_MS)
-        )) {
+        if (zigbee_network_joined &&
+            (now - app_start_tick) >=
+                pdMS_TO_TICKS(FIRST_ZIGBEE_REPORT_DELAY_MS) &&
+            (last_zigbee_update == 0 ||
+             (now - last_zigbee_update) >=
+                 pdMS_TO_TICKS(ZIGBEE_UPDATE_INTERVAL_MS))) {
             ESP_LOGI(
                 TAG,
                 ">>> Zigbee update attempt: CO2=%u ppm, T=%.1f C, H=%.1f %%",
