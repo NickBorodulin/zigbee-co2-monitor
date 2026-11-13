@@ -132,7 +132,7 @@
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010005UL
+#define OTA_FILE_VERSION                0x00010006UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
