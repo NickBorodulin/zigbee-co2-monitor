@@ -71,6 +71,9 @@
 #define SCD40_ADDRESS   0x62
 #define SCD40_STARTUP_SETTLE_DELAY_MS 500
 #define FIRST_ZIGBEE_REPORT_DELAY_MS 10000
+#define TEMP_SPIKE_THRESHOLD_C 2.0f
+#define TEMP_STEP_CANDIDATE_TOLERANCE_C 0.5f
+#define TEMP_STEP_CONFIRM_SAMPLES 3U
 
 
 // ------------------------------------------------------------
@@ -132,7 +135,7 @@
 /* Bump OTA_FILE_VERSION for every published image. Keep manufacturer/image
  * identifiers identical in the Zigbee OTA file and the Zigbee2MQTT index. */
 #define FW_APPLICATION_VERSION          1U
-#define OTA_FILE_VERSION                0x00010006UL
+#define OTA_FILE_VERSION                0x00010007UL
 #define OTA_MANUFACTURER_CODE           0x1234U
 #define OTA_IMAGE_TYPE                  0x5678U
 #define OTA_MAX_DATA_SIZE               223U
@@ -2973,6 +2976,11 @@ void app_main(void)
     TickType_t last_zigbee_update = 0;
     #define ZIGBEE_UPDATE_INTERVAL_MS 60000
     bool skip_first_valid_measurement = true;
+    bool have_accepted_temperature = false;
+    float last_accepted_temperature = 0.0f;
+    bool temperature_step_candidate_active = false;
+    float temperature_step_candidate = 0.0f;
+    uint8_t temperature_step_candidate_count = 0;
 
     while (true) {
 
@@ -3074,6 +3082,50 @@ void app_main(void)
                      "Discarding the first valid SCD40 measurement after startup");
             vTaskDelay(pdMS_TO_TICKS(250));
             continue;
+        }
+
+        /* A single abrupt temperature jump is implausible for the SCD4x's
+         * slow thermal response. Reject it, but accept a stable new level
+         * after several consecutive readings to avoid locking out real changes. */
+        if (!have_accepted_temperature) {
+            last_accepted_temperature = temperature;
+            have_accepted_temperature = true;
+        } else if (fabsf(temperature - last_accepted_temperature) >
+                   TEMP_SPIKE_THRESHOLD_C) {
+            if (!temperature_step_candidate_active ||
+                fabsf(temperature - temperature_step_candidate) >
+                    TEMP_STEP_CANDIDATE_TOLERANCE_C) {
+                temperature_step_candidate_active = true;
+                temperature_step_candidate = temperature;
+                temperature_step_candidate_count = 1;
+            } else {
+                temperature_step_candidate =
+                    (temperature_step_candidate * temperature_step_candidate_count + temperature) /
+                    (temperature_step_candidate_count + 1U);
+                temperature_step_candidate_count++;
+            }
+
+            if (temperature_step_candidate_count < TEMP_STEP_CONFIRM_SAMPLES) {
+                ESP_LOGW(TAG,
+                         "Discarding temperature jump %.2f C (last accepted %.2f C); "
+                         "candidate %u/%u",
+                         temperature, last_accepted_temperature,
+                         (unsigned)temperature_step_candidate_count,
+                         (unsigned)TEMP_STEP_CONFIRM_SAMPLES);
+                vTaskDelay(pdMS_TO_TICKS(250));
+                continue;
+            }
+
+            ESP_LOGI(TAG,
+                     "Accepting stable new temperature level %.2f C after %u readings",
+                     temperature, (unsigned)temperature_step_candidate_count);
+            last_accepted_temperature = temperature;
+            temperature_step_candidate_active = false;
+            temperature_step_candidate_count = 0;
+        } else {
+            last_accepted_temperature = temperature;
+            temperature_step_candidate_active = false;
+            temperature_step_candidate_count = 0;
         }
 
         const float corrected_temperature =

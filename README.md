@@ -26,6 +26,15 @@ An open-source indoor air-quality monitor built around the ESP32-H2 and Sensirio
 | N-channel MOSFET | GC9A01 backlight switching and PWM dimming |
 | Push button | Zigbee factory reset when held for 3 seconds |
 
+### Device photos
+
+The images below show the device from the front and back.
+
+<p align="center">
+  <img src="hardware/Front.jpg" alt="Front view of the Zigbee CO2 monitor" width="48%">
+  <img src="hardware/Back.jpg" alt="Back view of the Zigbee CO2 monitor" width="48%">
+</p>
+
 ### 3D-printable enclosure
 
 The enclosure files are available as STL models in [`hardware/3D Print`](hardware/3D%20Print/). Each preview shows the model from isometric, top, and side views.
